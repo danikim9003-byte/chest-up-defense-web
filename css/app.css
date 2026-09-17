@@ -1,0 +1,44 @@
+﻿html, body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: #000;
+    font-family: 'Malgun Gothic', 'Segoe UI', sans-serif;
+    color: #ddd;
+}
+
+#canvasHolder {
+    position: fixed;
+    top: 0; right: 0; bottom: 0; left: 0;
+    width: 100vw; height: 100vh;
+    background: #000;
+}
+
+#theCanvas {
+    position: fixed;
+    top: 0; right: 0; bottom: 0; left: 0;
+    /* iPhone/webkit 의 텍스트 선택·돋보기를 막는다 */
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+#boot, #status {
+    position: fixed;
+    left: 0; bottom: 0;
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+    background: rgba(0,0,0,0.6);
+}
+
+#status.failed { color: #ff6b6b; }
+
+#blazor-error-ui {
+    background: lightyellow;
+    color: #333;
+    bottom: 0; left: 0;
+    padding: 0.6rem 1.25rem;
+    position: fixed;
+    width: 100%;
+    z-index: 1000;
+    display: none;
+}

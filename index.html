@@ -1,0 +1,246 @@
+﻿<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>WindEngine Web</title>
+    <base href="./" />
+    <link href="css/app.css" rel="stylesheet" />
+</head>
+<body>
+    <div id="app">
+        <div id="boot">엔진을 내려받는 중…</div>
+    </div>
+
+    <div id="blazor-error-ui">
+        오류가 발생했다. <a href="" class="reload">다시 불러오기</a> <a class="dismiss">x</a>
+    </div>
+
+    <script src="_framework/blazor.webassembly.js"></script>
+
+    <!-- KNI(WebGL2) 백엔드가 쓰는 브라우저 손들 — 캔버스·입력·오디오. 판 번호는
+         nkast.Kni.Platform.Blazor.GL 4.3.9001 이 싣는 정적 자산의 실이름이다. -->
+    <script src="_content/nkast.Wasm.JSInterop/js/JSObject.10.0.3.js"></script>
+    <script src="_content/nkast.Wasm.Dom/js/Window.10.0.3.js"></script>
+    <script src="_content/nkast.Wasm.Dom/js/Document.10.0.3.js"></script>
+    <script src="_content/nkast.Wasm.Dom/js/Navigator.10.0.3.js"></script>
+    <script src="_content/nkast.Wasm.Dom/js/Gamepad.10.0.3.js"></script>
+    <script src="_content/nkast.Wasm.Dom/js/Media.10.0.3.js"></script>
+    <script src="_content/nkast.Wasm.XHR/js/XHR.10.0.3.js"></script>
+    <script src="_content/nkast.Wasm.Canvas/js/Canvas.10.0.3.js"></script>
+    <script src="_content/nkast.Wasm.Canvas/js/CanvasGLContext.10.0.3.js"></script>
+    <script src="_content/nkast.Wasm.Audio/js/Audio.10.0.3.js"></script>
+    <script src="_content/nkast.Wasm.XR/js/XR.10.0.3.js"></script>
+
+    <script>
+        // 엔진이 브라우저에 내는 구멍을 막는 자리 (계약 = WindEngine.Core.Platform.BrowserBridge).
+        window.windEngineWeb = {
+            init: function (instance) {
+                window.windEngineWeb._instance = instance;
+
+                var canvas = document.getElementById('theCanvas');
+                var holder = document.getElementById('canvasHolder');
+                function fit() {
+                    canvas.width = holder.clientWidth;
+                    canvas.height = holder.clientHeight;
+                }
+                fit();
+                window.addEventListener('resize', fit);
+                canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+                document.addEventListener('visibilitychange', function () {
+                    instance.invokeMethod('VisibilityChanged', !document.hidden);
+                });
+                // 탭을 닫는 손은 visibilitychange 를 항상 내지는 않는다 — 세이브를 내리는
+                // 마지막 기회를 둘 다 잡는다 (두 번 내려도 같은 내용이다).
+                window.addEventListener('pagehide', function () {
+                    instance.invokeMethod('VisibilityChanged', false);
+                });
+
+                var boot = document.getElementById('boot');
+                if (boot) boot.remove();
+
+                function tick() {
+                    instance.invokeMethod('TickDotNet');
+                    window.requestAnimationFrame(tick);
+                }
+                window.requestAnimationFrame(tick);
+            },
+            openUrl: function (url) {
+                try { return window.open(url, '_blank') !== null; } catch (e) { return false; }
+            },
+            setClipboard: function (text) {
+                // 권한·보안 맥락에 따라 거절될 수 있다 — 그때는 false 가 정답이다.
+                try { navigator.clipboard.writeText(text); return true; } catch (e) { return false; }
+            },
+
+            // ── 팩: 「처음 열릴 때」 한 조각 받기 ────────────────────────────────────
+            // 동기 XHR 인 이유: 부르는 쪽이 엔진의 동기 자원 읽기다. 비동기로 바꾸면 엔진·게임의
+            // 자원 통로 전체가 따라 바뀐다. 시작 몫(eager)은 여기로 오지 않는다 — 그쪽은
+            // HttpClient 가 6개씩 병렬로 받는다.
+            _range: function (url, offset, size) {
+                var xhr = new XMLHttpRequest();
+                xhr.open('GET', url, false);
+                xhr.setRequestHeader('Range', 'bytes=' + offset + '-' + (offset + size - 1));
+                // 바이너리를 문자로 안 깨고 받는 유일한 동기 수단이다 (responseType 은 동기에서 금지).
+                xhr.overrideMimeType('text/plain; charset=x-user-defined');
+                xhr.send(null);
+                if (xhr.status !== 200 && xhr.status !== 206) throw new Error('range ' + xhr.status);
+                var text = xhr.responseText;
+                var bytes = new Uint8Array(text.length);
+                for (var i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
+                // 서버가 Range 를 무시하면 통째로 온다 — 그때도 답은 나와야 한다.
+                if (xhr.status === 200 && bytes.length > size) bytes = bytes.subarray(offset, offset + size);
+                if (bytes.length !== size) throw new Error('range length ' + bytes.length + ' != ' + size);
+                return bytes;
+            },
+            fetchRangeSync: function (url, offset, size) {
+                try {
+                    var bytes = window.windEngineWeb._range(url, offset, size);
+                    var binary = '';
+                    for (var j = 0; j < bytes.length; j += 0x8000)
+                        binary += String.fromCharCode.apply(null, bytes.subarray(j, j + 0x8000));
+                    return btoa(binary);
+                } catch (e) { return null; }
+            },
+
+            // ── 팩: **파일 시스템 층의 게으른 자원** ────────────────────────────────
+            // 왜 여기인가: 엔진의 자원 통로(ResourceManager·FontLibrary)에 훅을 거는 것만으로는
+            // 게임이 `File.OpenRead`·`NVorbis.VorbisReader(path)` 로 파일을 직접 열 때를 못 잡아
+            // **빈 파일을 읽는다** (실측: 상자 디펜스의 소리). 그래서 훅을 한 층 아래,
+            // .NET WASM 런타임이 쓰는 emscripten 파일 시스템에 건다 — 노드의 `contents` 를
+            // 「처음 읽을 때 채우는 게터」로 세워 두면 `System.IO` 의 어느 길로 와도 채워진다
+            // (emscripten 자신의 `FS.createLazyFile` 과 같은 수법 · URL 대신 pack.bin 구간).
+            //
+            // 여기서 못 하는 것 = sha256 대조. 브라우저의 해시는 비동기뿐이고 이 자리는 동기다.
+            // 길이는 재고(`_range`), 어긋나면 읽기가 예외로 죽는다 — 조용히 틀리진 않는다.
+            _fs: function () {
+                try {
+                    var rt = globalThis.getDotnetRuntime && globalThis.getDotnetRuntime(0);
+                    return (rt && rt.Module && rt.Module.FS) || null;
+                } catch (e) { return null; }
+            },
+            // 목록은 줄 하나에 `경로\t오프셋\t길이`. 한 번에 넘기는 이유 = 자원 수가 천 단위라
+            // 파일마다 상호 호출을 하면 그 자체가 시작 시간이 된다.
+            lazyMountAll: function (url, spec) {
+                var FS = window.windEngineWeb._fs();
+                if (!FS) return -1;   // 런타임 모양이 다르다 — 부르는 쪽이 옛 방식으로 물러선다.
+                var lines = spec.split('\n');
+                var made = 0;
+                for (var i = 0; i < lines.length; i++) {
+                    if (!lines[i]) continue;
+                    var part = lines[i].split('\t');
+                    if (part.length !== 3) continue;
+                    if (window.windEngineWeb._lazyMount(FS, url, part[0], +part[1], +part[2])) made++;
+                }
+                return made;
+            },
+            _lazyMount: function (FS, url, path, offset, size) {
+                try {
+                    var cut = path.lastIndexOf('/');
+                    var dir = cut > 0 ? path.substring(0, cut) : '/';
+                    FS.mkdirTree(dir);
+                    var node = FS.createFile(dir, path.substring(cut + 1), {}, true, false);
+                    // 크기는 처음부터 진짜다 — 훑는 손(폴더 목록·파일 크기)이 내용을 안 건드리고
+                    // 답을 얻어야 그 손 때문에 팩 전량이 내려오는 일이 없다.
+                    node.usedBytes = size;
+                    // 센티널이 `undefined` 인 이유: 채우는 손이 `null` 을 앉힐 수 있다
+                    // (파일 쓰기의 자르기가 그렇게 온다) — 그것을 「아직 안 받았다」로 읽으면
+                    // 방금 비운 파일을 팩에서 도로 받아 온다.
+                    var filled = undefined;
+                    Object.defineProperty(node, 'contents', {
+                        configurable: true,
+                        get: function () {
+                            if (filled === undefined) filled = window.windEngineWeb._range(url, offset, size);
+                            return filled;
+                        },
+                        set: function (value) { filled = value; }
+                    });
+                    return true;
+                } catch (e) { return false; }
+            },
+
+            // ── 팩: **미리 받은 덩이를 게으른 노드에 앉히기** ────────────────────────
+            // 왜: 씬이 열릴 때 게으른 파일 수백 개가 낱개 동기 XHR 로 오는 것을 막는 자리
+            // (부르는 쪽 = GamePack.Prefetch — 구간 묶음을 6개씩 병렬로 받는다). 여기서는
+            // 이미 받아 둔 바이트를 나눠 앉히기만 하므로 네트워크를 타지 않는다.
+            // 목록은 줄 하나에 `경로\t덩이 안 위치\t길이`.
+            fillAll: function (spec, bytes) {
+                var FS = window.windEngineWeb._fs();
+                if (!FS) return -1;
+                // .NET 은 byte[] 를 Uint8Array 로 넘긴다. 판에 따라 base64 문자로 오면 그것도 받는다.
+                if (typeof bytes === 'string') {
+                    var raw = atob(bytes);
+                    var buf = new Uint8Array(raw.length);
+                    for (var k = 0; k < raw.length; k++) buf[k] = raw.charCodeAt(k);
+                    bytes = buf;
+                }
+                if (!(bytes instanceof Uint8Array)) {
+                    console.log('[pack] fillAll 바이트 폼을 모른다: ' + typeof bytes);
+                    return -1;   // 부르는 쪽이 파일 쓰기로 물러선다 (느릴 뿐 틀리지 않는다).
+                }
+                var lines = spec.split('\n');
+                var made = 0;
+                for (var i = 0; i < lines.length; i++) {
+                    if (!lines[i]) continue;
+                    var part = lines[i].split('\t');
+                    if (part.length !== 3) continue;
+                    try {
+                        var at = +part[1], size = +part[2];
+                        var node = FS.lookupPath(part[0]).node;
+                        // slice 로 복사한다 — subarray 로 두면 파일 수백 개가 같은 덩이를 물고
+                        // 살아, 한 파일에 쓴 것이 옆 파일로 새어 나갈 수 있다.
+                        node.contents = bytes.slice(at, at + size);
+                        node.usedBytes = size;
+                        made++;
+                    } catch (e) { }
+                }
+                return made;
+            },
+
+            // ── 세이브: IndexedDB 한 칸 ─────────────────────────────────────────────
+            // 탭을 닫으면 MEMFS 가 통째로 사라진다. 여기가 세이브·설정이 그 너머로 살아남는 자리다.
+            _db: function () {
+                return new Promise(function (resolve, reject) {
+                    var open = indexedDB.open('windengine', 1);
+                    open.onupgradeneeded = function () { open.result.createObjectStore('userdata'); };
+                    open.onsuccess = function () { resolve(open.result); };
+                    open.onerror = function () { reject(open.error); };
+                });
+            },
+            userDataLoad: function () {
+                return window.windEngineWeb._db().then(function (db) {
+                    return new Promise(function (resolve) {
+                        var get = db.transaction('userdata', 'readonly').objectStore('userdata').get('blob');
+                        get.onsuccess = function () { resolve(get.result || null); };
+                        get.onerror = function () { resolve(null); };
+                    });
+                }).catch(function () { return null; });
+            },
+            userDataSave: function (base64) {
+                // .NET 쪽은 답을 기다리지 않는다 — 실패해도 게임은 계속 서야 한다.
+                window.windEngineWeb._db().then(function (db) {
+                    db.transaction('userdata', 'readwrite').objectStore('userdata').put(base64, 'blob');
+                }).catch(function () { });
+            }
+        };
+
+        // 서비스 워커 — 두 번째 방문부터 엔진(`_framework`)을 네트워크 없이 연다 (자리 = sw.js).
+        // `updateViaCache: 'none'` 인 이유: 워커 자신이 캐시되면 새 판이 서도 옛 워커가 살아
+        // 옛 캐시를 내준다. 등록 실패는 삼킨다 — 워커가 없어도 게임은 종전대로 선다
+        // (http:// 로 띄운 자리·비보안 맥락에서는 브라우저가 아예 거절한다).
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register('sw.js', { scope: './', updateViaCache: 'none' })
+                    .catch(function (e) { console.log('[sw] 등록하지 못했다: ' + e); });
+            });
+        }
+
+        // iframe(itch.io 등)에 얹혔을 때 바깥 페이지가 스크롤되지 않게 막는다.
+        window.addEventListener('keydown', function (e) {
+            if ([32, 37, 38, 39, 40].indexOf(e.keyCode) > -1) e.preventDefault();
+        });
+        window.addEventListener('wheel', function (e) { e.preventDefault(); }, { passive: false });
+    </script>
+</body>
+</html>
