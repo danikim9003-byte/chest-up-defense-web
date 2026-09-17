@@ -12,7 +12,7 @@
 // 캐시로 받으려면 54MB 컨테이너를 첫 방문에 통째로 받아야 한다 — 지금 구도(첫 화면에 필요한
 // 몫만 받는다)를 정면으로 뒤집는 값이다. 그래서 `Range` 가 붙은 요청과 `pack.bin` 은 그냥
 // 흘려보낸다. `pack.json` 은 작고 판마다 고정이라 캐시한다.
-const VERSION = '20260913-001038-885-game-50DEC942127117D4';
+const VERSION = '20260913-001038-885-game-50DEC942127117D4-r2';
 const CACHE = 'windengine-' + VERSION;
 
 self.addEventListener('install', function (event) {
@@ -40,6 +40,13 @@ function bypass(request) {
 }
 
 self.addEventListener('fetch', function (event) {
+    // 목차와 구간 응답은 같은 게임 판으로 요청해 CDN·HTTP 캐시의 구판 혼합을 막는다.
+    const url = new URL(event.request.url);
+    if (url.origin === self.location.origin && /\/pack\/(pack\.json|pack\.bin)$/.test(url.pathname)) {
+        url.searchParams.set('gameVersion', VERSION);
+        event.respondWith(fetch(new Request(url.href, event.request), { cache: 'no-store' }));
+        return;
+    }
     if (bypass(event.request)) return;   // 손대지 않는다 = 브라우저 기본 동작 그대로.
     event.respondWith(
         caches.open(CACHE).then(function (cache) {
