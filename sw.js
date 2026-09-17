@@ -12,7 +12,7 @@
 // 캐시로 받으려면 54MB 컨테이너를 첫 방문에 통째로 받아야 한다 — 지금 구도(첫 화면에 필요한
 // 몫만 받는다)를 정면으로 뒤집는 값이다. 그래서 `Range` 가 붙은 요청과 `pack.bin` 은 그냥
 // 흘려보낸다. `pack.json` 은 작고 판마다 고정이라 캐시한다.
-const VERSION = '20260913-001038-885-game-50DEC942127117D4-r2';
+const VERSION = '20260913-001038-885-game-CEE058D2B944D4AB-r2';
 const CACHE = 'windengine-' + VERSION;
 
 self.addEventListener('install', function (event) {
