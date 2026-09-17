@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="utf-8" />
@@ -16,6 +16,23 @@
         오류가 발생했다. <a href="" class="reload">다시 불러오기</a> <a class="dismiss">x</a>
     </div>
 
+    <script>
+    // 서비스 워커를 지원하지 않는 브라우저도 목차와 팩을 같은 버전으로 읽는다.
+    (() => {
+        const version = '50DEC942127117D4';
+        const versioned = value => {
+            const url = new URL(value, document.baseURI);
+            if (url.origin === location.origin && /\/pack\/(pack\.json|pack\.bin)$/.test(url.pathname)) url.searchParams.set('gameVersion', version);
+            return url.href;
+        };
+        const originalFetch = window.fetch;
+        window.fetch = function(input, options) {
+            return originalFetch.call(this, input instanceof Request ? new Request(versioned(input.url), input) : versioned(input), options);
+        };
+        const originalOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url, ...rest) { return originalOpen.call(this, method, versioned(url), ...rest); };
+    })();
+    </script>
     <script src="_framework/blazor.webassembly.js"></script>
 
     <!-- KNI(WebGL2) 백엔드가 쓰는 브라우저 손들 — 캔버스·입력·오디오. 판 번호는
