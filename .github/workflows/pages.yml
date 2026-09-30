@@ -1,0 +1,43 @@
+name: Publish CHEST UP DEFENSE
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Verified web release tag
+        required: true
+      sha256:
+        description: Verified site.zip SHA256
+        required: true
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download verified static build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release }}
+          EXPECTED_SHA: ${{ inputs.sha256 }}
+        run: |
+          gh release download "$RELEASE_TAG" --pattern site.zip
+          printf '%s  site.zip\n' "$EXPECTED_SHA" | sha256sum --check --strict
+          mkdir site
+          unzip -q site.zip -d site
+          test -f site/index.html
+          test -f site/pack/pack.bin
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+      - name: Publish
+        id: deployment
+        uses: actions/deploy-pages@v5
